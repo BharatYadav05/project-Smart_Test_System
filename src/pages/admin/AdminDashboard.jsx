@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
+import { QRCodeSVG } from 'qrcode.react';
 import { CreateTestModal } from './CreateTestModal';
 import { 
   Users, 
@@ -13,7 +14,8 @@ import {
   Sparkles, 
   Loader2, 
   Radio,
-  ArrowRight
+  ArrowRight,
+  QrCode
 } from 'lucide-react';
 
 export const AdminDashboard = () => {
@@ -51,8 +53,20 @@ export const AdminDashboard = () => {
       .order('created_at', { ascending: false });
 
     if (testData) {
-      setTests(testData);
-      const active = testData.find((t) => t.status === 'active');
+      const now = Date.now();
+      // Check and auto-end any expired active tests
+      for (const t of testData) {
+        if (t.status === 'active' && t.end_at && new Date(t.end_at).getTime() <= now) {
+          t.status = 'ended';
+          supabase
+            .from('tests')
+            .update({ status: 'ended', ended_at: new Date().toISOString() })
+            .eq('id', t.id)
+            .then(() => {});
+        }
+      }
+      setTests([...testData]);
+      const active = testData.find((t) => t.status === 'active' && (!t.end_at || new Date(t.end_at).getTime() > now));
       setActiveTest(active || null);
     }
 
@@ -216,16 +230,29 @@ export const AdminDashboard = () => {
                 {activeTest.title}
               </h2>
               <p className="text-xs text-gray-300">
-                Classroom entry is open. Project the access code to students.
+                Classroom entry is open. Students can scan the QR code or enter the code.
               </p>
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="bg-black/40 border border-amber-500/40 px-5 py-2.5 rounded-xl text-center">
+              {/* Mini QR Code */}
+              <div className="bg-white p-2 rounded-xl shadow-md border-2 border-amber-400 flex flex-col items-center">
+                <QRCodeSVG
+                  value={`${window.location.origin}/join/${activeTest.access_code}`}
+                  size={64}
+                  level="M"
+                  includeMargin={false}
+                />
+                <span className="text-[9px] text-gray-800 font-bold mt-1 flex items-center gap-0.5">
+                  <QrCode className="w-2.5 h-2.5 text-amber-600" /> Scan QR
+                </span>
+              </div>
+
+              <div className="bg-black/40 border border-amber-500/40 px-4 py-2.5 rounded-xl text-center">
                 <span className="text-[10px] text-amber-400/80 block uppercase font-mono tracking-widest">
                   ACCESS CODE
                 </span>
-                <span className="text-3xl font-mono font-extrabold text-amber-400 tracking-wider">
+                <span className="text-2xl font-mono font-extrabold text-amber-400 tracking-wider">
                   {activeTest.access_code}
                 </span>
               </div>

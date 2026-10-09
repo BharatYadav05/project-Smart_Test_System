@@ -16,21 +16,31 @@ export const StudentIdentity = () => {
   useEffect(() => {
     const raw = sessionStorage.getItem('current_test_data');
     if (raw) {
-      setTestData(JSON.parse(raw));
-    } else {
-      // Re-validate if direct reload
-      fetchTest();
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.test?.access_code?.toUpperCase() === code?.toUpperCase()) {
+          setTestData(parsed);
+          return;
+        }
+      } catch (e) {}
     }
+    // Re-validate if direct QR scan or page reload
+    fetchTest();
   }, [code]);
 
   const fetchTest = async () => {
     if (!code) return;
-    const { data } = await supabase.rpc('validate_access_code', { p_code: code });
+    setLoading(true);
+    setError(null);
+    const { data, error: rpcError } = await supabase.rpc('validate_access_code', { 
+      p_code: code.trim().toUpperCase() 
+    });
+    setLoading(false);
     if (data?.success) {
       setTestData(data);
       sessionStorage.setItem('current_test_data', JSON.stringify(data));
     } else {
-      navigate('/');
+      setError(data?.error || rpcError?.message || 'This test session has ended or the access code is invalid.');
     }
   };
 
@@ -68,6 +78,29 @@ export const StudentIdentity = () => {
   };
 
   if (!testData) {
+    if (error) {
+      return (
+        <div className="min-h-[calc(100vh-64px)] flex items-center justify-center bg-[#f5f6fa] p-4">
+          <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-gray-200 p-8 text-center">
+            <div className="w-14 h-14 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-4">
+              <AlertCircle className="w-7 h-7" />
+            </div>
+            <h2 className="text-xl font-bold text-gray-900">
+              Invalid or Expired Test
+            </h2>
+            <p className="text-sm text-gray-500 mt-2">
+              {error}
+            </p>
+            <button
+              onClick={() => navigate('/')}
+              className="mt-6 w-full py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-sm shadow-md transition-all"
+            >
+              Enter Code Manually
+            </button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="min-h-[calc(100vh-64px)] flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-amber-600" />

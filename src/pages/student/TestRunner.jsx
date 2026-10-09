@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { ImageUpload } from '../../components/ImageUpload';
@@ -32,6 +32,23 @@ export const TestRunner = () => {
   const [codePhotoUrls, setCodePhotoUrls] = useState({});
   const [outputPhotoUrls, setOutputPhotoUrls] = useState({});
 
+  // Refs to avoid stale closures in timers and realtime subscriptions
+  const mcqAnswersRef = useRef(mcqAnswers);
+  mcqAnswersRef.current = mcqAnswers;
+  const codingTextsRef = useRef(codingTexts);
+  codingTextsRef.current = codingTexts;
+  const codePhotoUrlsRef = useRef(codePhotoUrls);
+  codePhotoUrlsRef.current = codePhotoUrls;
+  const outputPhotoUrlsRef = useRef(outputPhotoUrls);
+  outputPhotoUrlsRef.current = outputPhotoUrls;
+  const testDataRef = useRef(testData);
+  testDataRef.current = testData;
+  const attemptIdRef = useRef(attemptId);
+  attemptIdRef.current = attemptId;
+  const sessionTokenRef = useRef(sessionToken);
+  sessionTokenRef.current = sessionToken;
+  const isSubmittingRef = useRef(false);
+
   // Timer
   const [timeRemaining, setTimeRemaining] = useState('--:--');
   const [submitting, setSubmitting] = useState(false);
@@ -49,9 +66,13 @@ export const TestRunner = () => {
       return;
     }
 
-    setTestData(JSON.parse(rawTest));
+    const parsedTest = JSON.parse(rawTest);
+    setTestData(parsedTest);
+    testDataRef.current = parsedTest;
     setAttemptId(aId);
+    attemptIdRef.current = aId;
     setSessionToken(sToken);
+    sessionTokenRef.current = sToken;
     setStudentName(sName || '');
     setStudentRoll(sRoll || '');
 
@@ -59,10 +80,35 @@ export const TestRunner = () => {
     const cachedMcq = localStorage.getItem(`mcq_answers_${aId}`);
     if (cachedMcq) {
       try {
-        setMcqAnswers(JSON.parse(cachedMcq));
+        const parsedCached = JSON.parse(cachedMcq);
+        setMcqAnswers(parsedCached);
+        mcqAnswersRef.current = parsedCached;
       } catch (e) {}
     }
   }, []);
+
+  // Realtime subscription: if teacher ends test manually or status becomes ended
+  useEffect(() => {
+    const testId = testData?.test?.id;
+    if (!testId) return;
+
+    const channel = supabase
+      .channel(`student-test-session-${testId}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'tests', filter: `id=eq.${testId}` },
+        (payload) => {
+          if (payload?.new?.status === 'ended') {
+            handleSubmitTest();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [testData?.test?.id]);
 
   // Timer countdown
   useEffect(() => {
@@ -117,22 +163,32 @@ export const TestRunner = () => {
   };
 
   const handleSubmitTest = async () => {
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setSubmitting(true);
     setError(null);
 
+    const currentAttemptId = attemptIdRef.current || attemptId;
+    const currentSessionToken = sessionTokenRef.current || sessionToken;
+    const currentMcqAnswers = mcqAnswersRef.current || mcqAnswers;
+    const currentCodingTexts = codingTextsRef.current || codingTexts;
+    const currentCodePhotoUrls = codePhotoUrlsRef.current || codePhotoUrls;
+    const currentOutputPhotoUrls = outputPhotoUrlsRef.current || outputPhotoUrls;
+    const currentCodingQuestions = testDataRef.current?.coding_questions || coding_questions;
+
     // Format MCQ payload
-    const formattedMcqAnswers = Object.entries(mcqAnswers).map(([qId, opts]) => ({
+    const formattedMcqAnswers = Object.entries(currentMcqAnswers).map(([qId, opts]) => ({
       question_id: qId,
       selected_options: opts,
     }));
 
     // Format Coding payload (supporting arrays of up to 20 code photos & 5 output photos)
-    const formattedCodingResponses = coding_questions.map((cq) => {
-      const cPhotos = codePhotoUrls[cq.id] || [];
-      const oPhotos = outputPhotoUrls[cq.id] || [];
+    const formattedCodingResponses = currentCodingQuestions.map((cq) => {
+      const cPhotos = currentCodePhotoUrls[cq.id] || [];
+      const oPhotos = currentOutputPhotoUrls[cq.id] || [];
       return {
         coding_question_id: cq.id,
-        code_text: codingTexts[cq.id] || '',
+        code_text: currentCodingTexts[cq.id] || '',
         code_photo_url: cPhotos[0] || null,
         output_photo_url: oPhotos[0] || null,
         code_photo_urls: cPhotos,
@@ -140,26 +196,33 @@ export const TestRunner = () => {
       };
     });
 
-    // Call submit_test_attempt RPC (Atomic Transaction)
-    const { data, error: rpcError } = await supabase.rpc('submit_test_attempt', {
-      p_attempt_id: attemptId,
-      p_session_token: sessionToken,
-      p_mcq_answers: formattedMcqAnswers,
-      p_coding_responses: formattedCodingResponses,
-    });
+    try {
+      // Call submit_test_attempt RPC (Atomic Transaction)
+      const { data, error: rpcError } = await supabase.rpc('submit_test_attempt', {
+        p_attempt_id: currentAttemptId,
+        p_session_token: currentSessionToken,
+        p_mcq_answers: formattedMcqAnswers,
+        p_coding_responses: formattedCodingResponses,
+      });
 
-    setSubmitting(false);
-
-    if (rpcError || !data || !data.success) {
-      setError(data?.error || rpcError?.message || 'Failed to submit test.');
-    } else {
-      localStorage.removeItem(`mcq_answers_${attemptId}`);
-      sessionStorage.removeItem('current_test_data');
-      sessionStorage.removeItem('current_attempt_id');
-      sessionStorage.removeItem('current_session_token');
-      sessionStorage.setItem('submitted_success', 'true');
-      sessionStorage.setItem('submitted_student_name', studentName);
-      navigate('/submitted');
+      if (rpcError || !data || !data.success) {
+        setError(data?.error || rpcError?.message || 'Failed to submit test.');
+        isSubmittingRef.current = false;
+        setSubmitting(false);
+      } else {
+        localStorage.removeItem(`mcq_answers_${currentAttemptId}`);
+        sessionStorage.removeItem('current_test_data');
+        sessionStorage.removeItem('current_attempt_id');
+        sessionStorage.removeItem('current_session_token');
+        sessionStorage.setItem('submitted_success', 'true');
+        sessionStorage.setItem('submitted_student_name', studentName);
+        navigate('/submitted');
+      }
+    } catch (err) {
+      console.error('Submission error:', err);
+      setError('An unexpected error occurred during submission.');
+      isSubmittingRef.current = false;
+      setSubmitting(false);
     }
   };
 
