@@ -69,10 +69,13 @@ export const StudentIdentity = () => {
       setError(data?.error || rpcError?.message || 'Failed to start test session.');
     } else {
       // Save attempt info
+      const cleanName = name.trim();
+      const cleanRoll = rollNo.trim().toUpperCase();
       sessionStorage.setItem('current_attempt_id', data.attempt_id);
       sessionStorage.setItem('current_session_token', data.session_token);
-      sessionStorage.setItem('current_student_name', name.trim());
-      sessionStorage.setItem('current_student_roll', rollNo.trim().toUpperCase());
+      sessionStorage.setItem('current_student_name', cleanName);
+      sessionStorage.setItem('current_student_roll', cleanRoll);
+      sessionStorage.setItem('is_resumed_attempt', data.resumed ? 'true' : 'false');
       navigate('/test');
     }
   };
@@ -134,7 +137,7 @@ export const StudentIdentity = () => {
           Student Information
         </h1>
         <p className="text-xs text-gray-500 mt-1">
-          No account needed. Your submission will automatically add you to the class roster.
+          No account needed. Your submission will automatically add you to your respective class.
         </p>
 
         {error && (
@@ -172,7 +175,7 @@ export const StudentIdentity = () => {
               <input
                 type="text"
                 required
-                maxLength={6}
+                maxLength={3}
                 value={rollNo}
                 onChange={(e) => setRollNo(e.target.value.trim().toUpperCase())}
                 placeholder="077"

@@ -12,7 +12,10 @@ import {
   Loader2, 
   FileCheck,
   ChevronRight,
-  ChevronLeft
+  ChevronLeft,
+  Sparkles,
+  X,
+  Cloud
 } from 'lucide-react';
 
 export const TestRunner = () => {
@@ -31,6 +34,8 @@ export const TestRunner = () => {
   const [codingTexts, setCodingTexts] = useState({});
   const [codePhotoUrls, setCodePhotoUrls] = useState({});
   const [outputPhotoUrls, setOutputPhotoUrls] = useState({});
+  const [resumedBanner, setResumedBanner] = useState(null);
+  const [saveStatus, setSaveStatus] = useState('Saved');
 
   // Refs to avoid stale closures in timers and realtime subscriptions
   const mcqAnswersRef = useRef(mcqAnswers);
@@ -48,6 +53,7 @@ export const TestRunner = () => {
   const sessionTokenRef = useRef(sessionToken);
   sessionTokenRef.current = sessionToken;
   const isSubmittingRef = useRef(false);
+  const autoSaveTimerRef = useRef(null);
 
   // Timer
   const [timeRemaining, setTimeRemaining] = useState('--:--');
@@ -60,6 +66,7 @@ export const TestRunner = () => {
     const sToken = sessionStorage.getItem('current_session_token');
     const sName = sessionStorage.getItem('current_student_name');
     const sRoll = sessionStorage.getItem('current_student_roll');
+    const isResumed = sessionStorage.getItem('is_resumed_attempt') === 'true';
 
     if (!rawTest || !aId || !sToken) {
       navigate('/');
@@ -76,16 +83,164 @@ export const TestRunner = () => {
     setStudentName(sName || '');
     setStudentRoll(sRoll || '');
 
-    // Restore cached MCQ answers if any
-    const cachedMcq = localStorage.getItem(`mcq_answers_${aId}`);
-    if (cachedMcq) {
+    // Load saved progress (both local device storage and cloud database draft)
+    loadSavedProgress(parsedTest.test.id, sRoll, aId, isResumed);
+  }, []);
+
+  const loadSavedProgress = async (testId, rollNo, aId, isResumed) => {
+    let recoveredMcq = {};
+    let recoveredCoding = {};
+    let recoveredCodePhotos = {};
+    let recoveredOutputPhotos = {};
+    let recoveredTab = 'mcq';
+    let hadSavedProgress = false;
+
+    // 1. Recover from LocalStorage (Instant / Same Device)
+    const localKey = `test_progress_${testId}_${rollNo}`;
+    const localSaved = localStorage.getItem(localKey);
+    if (localSaved) {
       try {
-        const parsedCached = JSON.parse(cachedMcq);
-        setMcqAnswers(parsedCached);
-        mcqAnswersRef.current = parsedCached;
+        const parsed = JSON.parse(localSaved);
+        if (parsed.mcqAnswers && Object.keys(parsed.mcqAnswers).length > 0) {
+          recoveredMcq = { ...parsed.mcqAnswers };
+          hadSavedProgress = true;
+        }
+        if (parsed.codingTexts && Object.keys(parsed.codingTexts).length > 0) {
+          recoveredCoding = { ...parsed.codingTexts };
+          hadSavedProgress = true;
+        }
+        if (parsed.codePhotoUrls && Object.keys(parsed.codePhotoUrls).length > 0) {
+          recoveredCodePhotos = { ...parsed.codePhotoUrls };
+          hadSavedProgress = true;
+        }
+        if (parsed.outputPhotoUrls && Object.keys(parsed.outputPhotoUrls).length > 0) {
+          recoveredOutputPhotos = { ...parsed.outputPhotoUrls };
+          hadSavedProgress = true;
+        }
+        if (parsed.activeTab) {
+          recoveredTab = parsed.activeTab;
+        }
       } catch (e) {}
     }
-  }, []);
+
+    // 2. Recover from Supabase Cloud Draft (Cross-Device & Device Switch)
+    try {
+      const { data: attemptRow } = await supabase
+        .from('test_attempts')
+        .select('draft_data')
+        .eq('id', aId)
+        .single();
+
+      if (attemptRow?.draft_data) {
+        const cloudDraft = attemptRow.draft_data;
+        if (cloudDraft.mcqAnswers && Object.keys(cloudDraft.mcqAnswers).length > 0) {
+          recoveredMcq = { ...recoveredMcq, ...cloudDraft.mcqAnswers };
+          hadSavedProgress = true;
+        }
+        if (cloudDraft.codingTexts && Object.keys(cloudDraft.codingTexts).length > 0) {
+          recoveredCoding = { ...recoveredCoding, ...cloudDraft.codingTexts };
+          hadSavedProgress = true;
+        }
+        if (cloudDraft.codePhotoUrls && Object.keys(cloudDraft.codePhotoUrls).length > 0) {
+          recoveredCodePhotos = { ...recoveredCodePhotos, ...cloudDraft.codePhotoUrls };
+          hadSavedProgress = true;
+        }
+        if (cloudDraft.outputPhotoUrls && Object.keys(cloudDraft.outputPhotoUrls).length > 0) {
+          recoveredOutputPhotos = { ...recoveredOutputPhotos, ...cloudDraft.outputPhotoUrls };
+          hadSavedProgress = true;
+        }
+        if (cloudDraft.activeTab) {
+          recoveredTab = cloudDraft.activeTab;
+        }
+      }
+    } catch (err) {
+      console.log('Draft recovery notice:', err);
+    }
+
+    // 3. Fallback to legacy key
+    const legacyMcq = localStorage.getItem(`mcq_answers_${aId}`);
+    if (legacyMcq) {
+      try {
+        const parsedLegacy = JSON.parse(legacyMcq);
+        recoveredMcq = { ...recoveredMcq, ...parsedLegacy };
+        hadSavedProgress = true;
+      } catch (e) {}
+    }
+
+    // Apply recovered answers
+    if (Object.keys(recoveredMcq).length > 0) {
+      setMcqAnswers(recoveredMcq);
+      mcqAnswersRef.current = recoveredMcq;
+    }
+    if (Object.keys(recoveredCoding).length > 0) {
+      setCodingTexts(recoveredCoding);
+      codingTextsRef.current = recoveredCoding;
+    }
+    if (Object.keys(recoveredCodePhotos).length > 0) {
+      setCodePhotoUrls(recoveredCodePhotos);
+      codePhotoUrlsRef.current = recoveredCodePhotos;
+    }
+    if (Object.keys(recoveredOutputPhotos).length > 0) {
+      setOutputPhotoUrls(recoveredOutputPhotos);
+      outputPhotoUrlsRef.current = recoveredOutputPhotos;
+    }
+
+    // Auto-Resume Step: If student had answered MCQs, completed Part A, was on coding, or resumed:
+    const sName = sessionStorage.getItem('current_student_name') || 'Student';
+    if (isResumed || recoveredTab === 'coding' || (Object.keys(recoveredMcq).length > 0 && recoveredTab !== 'mcq')) {
+      setActiveTab('coding');
+      setResumedBanner(`Welcome back, ${sName}! Your previous progress has been restored. Continuing at Part B (Coding Work).`);
+    } else if (hadSavedProgress) {
+      setActiveTab(recoveredTab);
+      setResumedBanner(`Welcome back, ${sName}! Your saved test answers have been restored.`);
+    }
+  };
+
+  // Helper function to auto-save progress both locally & to cloud database
+  const saveProgressDraft = (newMcq, newCoding, newCodePhotos, newOutputPhotos, newTab) => {
+    const tData = testDataRef.current;
+    const aId = attemptIdRef.current;
+    const sRoll = sessionStorage.getItem('current_student_roll');
+    if (!tData?.test?.id || !sRoll) return;
+
+    const draftPayload = {
+      mcqAnswers: newMcq !== undefined ? newMcq : mcqAnswersRef.current,
+      codingTexts: newCoding !== undefined ? newCoding : codingTextsRef.current,
+      codePhotoUrls: newCodePhotos !== undefined ? newCodePhotos : codePhotoUrlsRef.current,
+      outputPhotoUrls: newOutputPhotos !== undefined ? newOutputPhotos : outputPhotoUrlsRef.current,
+      activeTab: newTab !== undefined ? newTab : activeTab,
+      updatedAt: Date.now(),
+    };
+
+    // 1. Instant LocalStorage Write
+    localStorage.setItem(`test_progress_${tData.test.id}_${sRoll}`, JSON.stringify(draftPayload));
+    if (aId) {
+      localStorage.setItem(`mcq_answers_${aId}`, JSON.stringify(draftPayload.mcqAnswers));
+    }
+
+    // 2. Debounced Cloud Database Sync to Supabase
+    setSaveStatus('Saving...');
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        if (aId) {
+          await supabase
+            .from('test_attempts')
+            .update({
+              draft_data: draftPayload,
+              last_activity_at: new Date().toISOString(),
+            })
+            .eq('id', aId);
+        }
+        setSaveStatus('All progress saved');
+      } catch (e) {
+        setSaveStatus('Saved locally');
+      }
+    }, 800);
+  };
 
   // Realtime subscription: if teacher ends test manually or status becomes ended
   useEffect(() => {
@@ -155,11 +310,34 @@ export const TestRunner = () => {
       updated = { ...mcqAnswers, [questionId]: nextOpts };
     }
     setMcqAnswers(updated);
+    mcqAnswersRef.current = updated;
+    saveProgressDraft(updated, undefined, undefined, undefined, activeTab);
+  };
 
-    // Save marked answer in localStorage immediately with student attempt ID
-    if (attemptId) {
-      localStorage.setItem(`mcq_answers_${attemptId}`, JSON.stringify(updated));
-    }
+  const handleCodingTextChange = (questionId, text) => {
+    const updated = { ...codingTexts, [questionId]: text };
+    setCodingTexts(updated);
+    codingTextsRef.current = updated;
+    saveProgressDraft(undefined, updated, undefined, undefined, activeTab);
+  };
+
+  const handleCodePhotosChange = (questionId, urls) => {
+    const updated = { ...codePhotoUrls, [questionId]: urls };
+    setCodePhotoUrls(updated);
+    codePhotoUrlsRef.current = updated;
+    saveProgressDraft(undefined, undefined, updated, undefined, activeTab);
+  };
+
+  const handleOutputPhotosChange = (questionId, urls) => {
+    const updated = { ...outputPhotoUrls, [questionId]: urls };
+    setOutputPhotoUrls(updated);
+    outputPhotoUrlsRef.current = updated;
+    saveProgressDraft(undefined, undefined, undefined, updated, activeTab);
+  };
+
+  const handleTabChange = (newTab) => {
+    setActiveTab(newTab);
+    saveProgressDraft(undefined, undefined, undefined, undefined, newTab);
   };
 
   const handleSubmitTest = async () => {
@@ -210,10 +388,15 @@ export const TestRunner = () => {
         isSubmittingRef.current = false;
         setSubmitting(false);
       } else {
+        const sRoll = sessionStorage.getItem('current_student_roll');
+        if (testData?.test?.id && sRoll) {
+          localStorage.removeItem(`test_progress_${testData.test.id}_${sRoll}`);
+        }
         localStorage.removeItem(`mcq_answers_${currentAttemptId}`);
         sessionStorage.removeItem('current_test_data');
         sessionStorage.removeItem('current_attempt_id');
         sessionStorage.removeItem('current_session_token');
+        sessionStorage.removeItem('is_resumed_attempt');
         sessionStorage.setItem('submitted_success', 'true');
         sessionStorage.setItem('submitted_student_name', studentName);
         navigate('/submitted');
@@ -240,18 +423,26 @@ export const TestRunner = () => {
       {/* Sticky Test Header with Timer */}
       <div className="bg-[#1a1612] text-white border-b border-[#352c22] sticky top-16 z-40 px-4 sm:px-6 py-3 shadow-md">
         <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                Roll: {studentRoll}
-              </span>
-              <span className="text-sm font-semibold text-gray-200">
-                {studentName}
+          <div className="flex items-center gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  Roll: {studentRoll}
+                </span>
+                <span className="text-sm font-semibold text-gray-200">
+                  {studentName}
+                </span>
+              </div>
+              <span className="text-xs text-gray-400 block mt-0.5 truncate max-w-sm sm:max-w-md">
+                {test.title}
               </span>
             </div>
-            <span className="text-xs text-gray-400 block mt-0.5 truncate max-w-sm sm:max-w-md">
-              {test.title}
-            </span>
+
+            {/* Cloud Auto-Saved Status Indicator */}
+            <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-gray-300 font-mono bg-white/5 border border-white/10 px-2.5 py-1 rounded-lg shadow-inner">
+              <span className={`w-2 h-2 rounded-full ${saveStatus === 'Saving...' ? 'bg-amber-400 animate-ping' : 'bg-emerald-400'}`}></span>
+              <span>{saveStatus}</span>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
@@ -262,7 +453,7 @@ export const TestRunner = () => {
             </div>
 
             <button
-              onClick={() => setActiveTab('review')}
+              onClick={() => handleTabChange('review')}
               className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-sm transition-all flex items-center gap-1.5"
             >
               <Send className="w-3.5 h-3.5" /> Submit Test
@@ -271,11 +462,37 @@ export const TestRunner = () => {
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-6 space-y-6">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-6 space-y-5">
+        {/* RESUMED PROGRESS ALERT BANNER */}
+        {resumedBanner && (
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-emerald-950 via-[#1a2e22] to-emerald-950 border border-emerald-500/40 text-white text-xs sm:text-sm flex items-center justify-between gap-3 shadow-lg animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center flex-shrink-0 shadow-inner">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="font-bold text-emerald-300 block text-xs uppercase tracking-wider">
+                  Session Restored
+                </span>
+                <p className="text-gray-200 text-xs sm:text-sm mt-0.5">
+                  {resumedBanner}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setResumedBanner(null)}
+              className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
+              title="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Navigation Tabs (MCQ, Coding, Review) */}
         <div className="flex items-center gap-2 border-b border-gray-200 bg-white p-2 rounded-xl shadow-xs">
           <button
-            onClick={() => setActiveTab('mcq')}
+            onClick={() => handleTabChange('mcq')}
             className={`flex-1 py-2 px-3 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
               activeTab === 'mcq'
                 ? 'bg-amber-600 text-white shadow-xs'
@@ -287,7 +504,7 @@ export const TestRunner = () => {
           </button>
 
           <button
-            onClick={() => setActiveTab('coding')}
+            onClick={() => handleTabChange('coding')}
             className={`flex-1 py-2 px-3 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
               activeTab === 'coding'
                 ? 'bg-amber-600 text-white shadow-xs'
@@ -299,7 +516,7 @@ export const TestRunner = () => {
           </button>
 
           <button
-            onClick={() => setActiveTab('review')}
+            onClick={() => handleTabChange('review')}
             className={`py-2 px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${
               activeTab === 'review'
                 ? 'bg-emerald-700 text-white shadow-xs'
@@ -382,7 +599,7 @@ export const TestRunner = () => {
             <div className="flex justify-end pt-2">
               <button
                 type="button"
-                onClick={() => setActiveTab('coding')}
+                onClick={() => handleTabChange('coding')}
                 className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-xl text-sm flex items-center gap-2 shadow-sm"
               >
                 Proceed to Coding Section <ChevronRight className="w-4 h-4" />
@@ -417,16 +634,17 @@ export const TestRunner = () => {
                     </div>
                   </div>
 
-                  {/* 1. Code Text Area */}
+                  {/* 1. Code Text Area with Auto-Save */}
                   {cq.require_code_text && (
                     <div className="space-y-2">
-                      <label className="block text-xs font-bold text-gray-700">
-                        Type or Paste Your Program Code:
+                      <label className="block text-xs font-bold text-gray-700 flex items-center justify-between">
+                        <span>Type or Paste Your Program Code:</span>
+                        <span className="text-[10px] text-emerald-600 font-normal">● Cloud auto-saved</span>
                       </label>
                       <textarea
                         rows={8}
                         value={codingTexts[cq.id] || ''}
-                        onChange={(e) => setCodingTexts({ ...codingTexts, [cq.id]: e.target.value })}
+                        onChange={(e) => handleCodingTextChange(cq.id, e.target.value)}
                         placeholder="#include <stdio.h>&#10;&#10;int main() {&#10;    // Write your code here&#10;    return 0;&#10;}"
                         className="w-full p-4 rounded-xl border border-gray-300 font-mono text-xs sm:text-sm bg-gray-900 text-emerald-400 focus:outline-none focus:ring-2 focus:ring-amber-500 leading-relaxed shadow-inner"
                       />
@@ -440,7 +658,7 @@ export const TestRunner = () => {
                         label="Code Photo(s) (from Monitor / Notebook)"
                         maxPhotos={20}
                         photoUrls={codePhotoUrls[cq.id] || []}
-                        onPhotosChange={(urls) => setCodePhotoUrls({ ...codePhotoUrls, [cq.id]: urls })}
+                        onPhotosChange={(urls) => handleCodePhotosChange(cq.id, urls)}
                       />
                     )}
 
@@ -449,7 +667,7 @@ export const TestRunner = () => {
                         label="Code Output Photo(s) (Execution Result Screen)"
                         maxPhotos={5}
                         photoUrls={outputPhotoUrls[cq.id] || []}
-                        onPhotosChange={(urls) => setOutputPhotoUrls({ ...outputPhotoUrls, [cq.id]: urls })}
+                        onPhotosChange={(urls) => handleOutputPhotosChange(cq.id, urls)}
                       />
                     )}
                   </div>
@@ -460,7 +678,7 @@ export const TestRunner = () => {
             <div className="flex justify-between items-center pt-2">
               <button
                 type="button"
-                onClick={() => setActiveTab('mcq')}
+                onClick={() => handleTabChange('mcq')}
                 className="px-4 py-2 border border-gray-300 rounded-xl text-xs sm:text-sm font-semibold text-gray-700 hover:bg-gray-100 flex items-center gap-1.5"
               >
                 <ChevronLeft className="w-4 h-4" /> Back to MCQs
@@ -468,7 +686,7 @@ export const TestRunner = () => {
 
               <button
                 type="button"
-                onClick={() => setActiveTab('review')}
+                onClick={() => handleTabChange('review')}
                 className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-sm flex items-center gap-2 shadow-sm"
               >
                 Review & Submit <ChevronRight className="w-4 h-4" />
@@ -520,7 +738,7 @@ export const TestRunner = () => {
             <div className="flex items-center justify-end gap-3 pt-4 border-t">
               <button
                 type="button"
-                onClick={() => setActiveTab('coding')}
+                onClick={() => handleTabChange('coding')}
                 className="px-4 py-2.5 border border-gray-300 text-gray-700 hover:bg-gray-100 rounded-xl text-xs sm:text-sm font-semibold"
               >
                 Back to Editing

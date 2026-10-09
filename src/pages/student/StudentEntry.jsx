@@ -14,7 +14,7 @@ export const StudentEntry = () => {
     e.preventDefault();
     const cleanCode = code.trim().toUpperCase();
     if (cleanCode.length < 4) {
-      setError('Please enter a valid access code (e.g. 7K9P2X).');
+      setError('Please enter a valid access code (e.g. A1B2C3).');
       return;
     }
 
@@ -46,10 +46,10 @@ export const StudentEntry = () => {
         </div>
 
         <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">
-          Enter Skill Lab Code
+          Enter Test Code
         </h1>
         <p className="text-gray-500 text-xs sm:text-sm mt-2 max-w-sm mx-auto">
-          Look at the classroom projector or whiteboard and enter the 6-character code provided by your trainer.
+          Look at the classroom SmartBoard and enter the 6-character Test code provided by your trainer.
         </p>
 
         {error && (
@@ -74,7 +74,7 @@ export const StudentEntry = () => {
                 setCode(e.target.value.toUpperCase());
                 setError(null);
               }}
-              placeholder="E.G. 7K9P2X"
+              placeholder="E.G. A1B2C3"
               style={{ textTransform: 'uppercase' }}
               className="w-full text-center tracking-[0.3em] font-mono text-2xl sm:text-3xl font-extrabold uppercase px-4 py-3 rounded-xl border-2 border-gray-300 focus:border-amber-500 focus:ring-4 focus:ring-amber-500/20 focus:outline-none transition-all placeholder:tracking-normal placeholder:font-normal placeholder:text-gray-300 text-gray-900"
             />

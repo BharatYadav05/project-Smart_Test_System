@@ -17,37 +17,26 @@ export const CreateTestModal = ({ isOpen, onClose, onSuccess }) => {
   const [selectedContextId, setSelectedContextId] = useState('');
   const [durationMins, setDurationMins] = useState(60);
 
-  // MCQs
+  // MCQs (Clean blank template)
   const [mcqs, setMcqs] = useState([
     {
-      question_text: 'Which HTML tag is used to define an internal style sheet?',
+      question_text: '',
       question_type: 'single',
       marks: 1,
       options: [
-        { option_text: '<style>', is_correct: true },
-        { option_text: '<css>', is_correct: false },
-        { option_text: '<script>', is_correct: false },
-        { option_text: '<link>', is_correct: false },
-      ],
-    },
-    {
-      question_text: 'Which of the following are valid C data types? (Select all that apply)',
-      question_type: 'multiple',
-      marks: 2,
-      options: [
-        { option_text: 'int', is_correct: true },
-        { option_text: 'float', is_correct: true },
-        { option_text: 'char', is_correct: true },
-        { option_text: 'number', is_correct: false },
+        { option_text: '', is_correct: true },
+        { option_text: '', is_correct: false },
+        { option_text: '', is_correct: false },
+        { option_text: '', is_correct: false },
       ],
     },
   ]);
 
-  // Coding Questions
+  // Coding Questions (Clean blank template)
   const [codingQuestions, setCodingQuestions] = useState([
     {
-      question_text: 'Write a C program to find the largest element in an array and print its index.',
-      instructions: 'Ensure proper indentation and include comments for clarity.',
+      question_text: '',
+      instructions: '',
       marks: 10,
       require_code_text: true,
       require_code_photo: true,
@@ -57,6 +46,34 @@ export const CreateTestModal = ({ isOpen, onClose, onSuccess }) => {
 
   useEffect(() => {
     if (isOpen) {
+      setStep(1);
+      setTitle('');
+      setDescription('');
+      setDurationMins(60);
+      setError(null);
+      setMcqs([
+        {
+          question_text: '',
+          question_type: 'single',
+          marks: 1,
+          options: [
+            { option_text: '', is_correct: true },
+            { option_text: '', is_correct: false },
+            { option_text: '', is_correct: false },
+            { option_text: '', is_correct: false },
+          ],
+        },
+      ]);
+      setCodingQuestions([
+        {
+          question_text: '',
+          instructions: '',
+          marks: 10,
+          require_code_text: true,
+          require_code_photo: true,
+          require_output_photo: true,
+        },
+      ]);
       loadContexts();
     }
   }, [isOpen]);
